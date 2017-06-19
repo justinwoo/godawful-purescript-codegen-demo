@@ -27,7 +27,6 @@ executable vidtracker2
                      , vidtracker2
                      , aeson
                      , scotty
-                     , generics-sop
                      , text
   default-language:    Haskell2010
 

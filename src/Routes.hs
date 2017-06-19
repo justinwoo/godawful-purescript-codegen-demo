@@ -5,17 +5,18 @@
 
 module Routes where
 
-import Data.Text (Text)
 import Types (Path, WatchedData, OpenRequest, Success, FileData, Unused)
+import GHC.Generics
 
 data Method
   = GET
   | POST
+  deriving (Show, Generic)
 
 data Route req res = Route
   { method :: Method
-  , url :: Text
-  }
+  , url :: String
+  } deriving (Show, Generic)
 
 files :: Route Unused [Path]
 files = Route {method = GET, url = "/api/files"}
