@@ -4,27 +4,31 @@ a demo using GHC8 Generics, Typeable, and some other crap to get enough informat
 
 a sane approach to this would probably use the purescript compiler library to actually build up the correct AST and output those using the various utilities in the compiler. however, as a madman, i have not thought to do this in a maintainable manner -- only to teach myself that such a thing is possible.
 
-also, i've been too lazy to actually do it, but i don't think there's any places where i truly need to use Typeable since all information I need could be obtained through metadata (e.g. [Stephen Diehl's example](https://gist.github.com/sdiehl/d033bfdbb02760b23e45ffeca7482957)).
+~~also, i've been too lazy to actually do it, but i don't think there's any places where i truly need to use Typeable since all information I need could be obtained through metadata (e.g. [Stephen Diehl's example](https://gist.github.com/sdiehl/d033bfdbb02760b23e45ffeca7482957)).~~ Updated this removing Typeable constraints from my top level definitions, hooray
 
 example output:
 
-```hs
+```purs
 files :: Route Unused (Array Path)
+files =
   { method: GET
   , url: "/api/files"
   }
 
 watched :: Route Unused (Array WatchedData)
+watched =
   { method: GET
   , url: "/api/watched"
   }
 
 open :: Route OpenRequest Success
+open =
   { method: POST
   , url: "/api/open"
   }
 
 update :: Route FileData (Array WatchedData)
+update =
   { method: POST
   , url: "/api/update"
   }
