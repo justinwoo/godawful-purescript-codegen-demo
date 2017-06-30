@@ -5,12 +5,13 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 
 module GeneratePS where
 
 import Data.List (intercalate)
 import Data.Proxy
-import Data.Typeable
+import Data.Text (Text)
 import GHC.Generics
 import GHC.TypeLits
 import Routes
@@ -20,64 +21,55 @@ class ExtractFields f where
   extractFields :: g f -> [(String, String)]
 
 instance ExtractFields f => ExtractFields (D1 m f) where
-  extractFields _ = extractFields (Proxy :: Proxy f)
+  extractFields _ = extractFields (Proxy @ f)
 
 instance ExtractFields f => ExtractFields (C1 m f) where
-  extractFields _ = extractFields (Proxy :: Proxy f)
+  extractFields _ = extractFields (Proxy @ f)
 
+-- distinction: newtypes are 'MetaSel 'Nothing, and I only allow primtives
 instance
-  ( Selector s
-  , Typeable t
+  ( GTypeName t
   )
-  => ExtractFields (S1 s (K1 r t)) where
+  => ExtractFields (S1 ('MetaSel 'Nothing z x c) (K1 r t)) where
   extractFields _ =
     pure
-      ( selName (undefined :: S1 s (K1 r t) ())
-      , prop
+      ( ""
+      , gtypeName (Proxy @ t)
       )
-    where
-      prop = convert result
-      convert y = case y of
-        "Text" -> "String"
-        "(Array Char)" -> "String"
-        name -> name
-      x :: t = undefined
-      result = case tyConName . typeRepTyCon . typeOf $ x of
-        "[]" -> "(Array " ++ (convert . tyConName . typeRepTyCon $ head . typeRepArgs . typeOf $ x) ++ ")"
-        a -> a
 
+-- distinction: record fields are 'MetaSel 'Just symbol, and I only allow newtypes
+instance
+  ( GTypeName (Rep t)
+  , KnownSymbol name
+  )
+  => ExtractFields (S1 ('MetaSel ('Just name) z x c) (K1 r t)) where
+  extractFields _ =
+    pure
+      ( symbolVal (Proxy @ name)
+      , gtypeName (Proxy @ (Rep t))
+      )
 
 instance (ExtractFields a, ExtractFields b) => ExtractFields (a :*: b) where
   extractFields _ =
-    extractFields (Proxy :: Proxy a) ++ extractFields (Proxy :: Proxy b)
-
-instance (ExtractFields a, ExtractFields b) => ExtractFields (a :+: b) where
-  extractFields _ =
-    extractFields (Proxy :: Proxy a) ++ extractFields (Proxy :: Proxy b)
-
-instance ExtractFields U1 where
-  extractFields _ = []
-
-instance ExtractFields K1 where
-  extractFields _ = []
+    extractFields (Proxy @ a) ++ extractFields (Proxy @ b)
 
 writeTypeDefinition :: forall a
-  . Typeable a
+  . GTypeName (Rep a)
   => ExtractFields (Rep a)
   => Proxy a
   -> String
 writeTypeDefinition _ =
-  "newtype " ++ name ++ " =" ++
+  "newtype " ++ name ++ " = " ++ name ++ " " ++
     contents ++ "\n"
   where
-    name = tyConName . typeRepTyCon $ typeRep (Proxy :: Proxy a)
-    fields = extractFields (Proxy :: Proxy (Rep a))
+    name = gtypeName (Proxy @ (Rep a))
+    fields = extractFields (Proxy @ (Rep a))
     isNormalNewtype = case fields of
       x:_ | fst x == "" -> True
       _ -> False
     format (k, t) = k ++ " :: " ++ t
     contents = if isNormalNewtype
-      then " " ++ name ++ " " ++ snd (head fields)
+      then snd (head fields)
       else "\n  { " ++ fields' ++ "\n  }"
     fields' = intercalate "\n  , " $ format <$> fields
 
@@ -86,46 +78,41 @@ nameOf :: forall a
   => GTypeName (Rep a)
   => Proxy a
   -> String
-nameOf _ = gtypeName (from (undefined :: a))
+nameOf _ = gtypeName (Proxy @ (Rep a))
 
 class GTypeName f where
-  gtypeName :: f a -> String
+  gtypeName :: g f -> String
 
-instance (GTypeName a, GTypeName b) => GTypeName (a :*: b) where
+instance (GTypeName f) => GTypeName (D1 m f) where
+  gtypeName _ = gtypeName (Proxy @ f)
+
+-- go into the Cons constructed type
+instance {-# OVERLAPPING #-} (GTypeName f) => GTypeName (C1 ('MetaCons ":" g s) f) where
+  gtypeName _ = gtypeName (Proxy @ f)
+
+instance (KnownSymbol n) => GTypeName (C1 ('MetaCons n g s) f) where
+  gtypeName _ = symbolVal (Proxy @ n)
+
+-- take the left side, as this is the result of a type product from Cons
+-- a :*: [a] or some shit, fucking ghc generics
+instance (GTypeName a) => GTypeName (a :*: b) where
   gtypeName _ =
-    gtypeName (undefined :: a ())
-      ++ gtypeName (undefined :: b ())
+    gtypeName (Proxy @ a)
 
-instance (GTypeName a, GTypeName b) => GTypeName (a :+: b) where
-  gtypeName _ =
-    gtypeName (undefined :: a ())
-      ++ gtypeName (undefined :: b ()) ++ ")"
-
-instance (Datatype m, GTypeName f) => GTypeName (D1 m f) where
-  gtypeName x = case datatypeName x of
-    "[]" -> gtypeName (undefined :: f ())
-    a -> a
-
-instance (KnownSymbol n, GTypeName f) => GTypeName (C1 ('MetaCons n g s) f) where
-  gtypeName _ = case symbolVal (Proxy :: Proxy n) of
-    "[]" -> "(Array "
-    ":" -> gtypeName (undefined :: f ())
-    a -> "the fuck is this really: " ++ a
+instance (GTypeName b) => GTypeName ((C1 ('MetaCons "[]" g s) f) :+: b) where
+  gtypeName _ = "(Array " ++ gtypeName (Proxy @ b) ++ ")"
 
 instance GTypeName f => GTypeName (S1 m f) where
-  gtypeName _ = gtypeName (undefined :: f ())
+  gtypeName _ = gtypeName (Proxy @ f)
 
-instance GTypeName U1 where
-  gtypeName _ = ""
+instance GTypeName (Rep f) => GTypeName (K1 R f) where
+  gtypeName _ = gtypeName (Proxy @ (Rep f))
 
-instance Typeable f => GTypeName (K1 m f) where
-  gtypeName _ =
-    sanitize $ tyConName . typeRepTyCon $ typeRep (Proxy :: Proxy f)
-    where
-      sanitize xs
-        | sx <- reverse xs
-        , take 2 sx == "][" = reverse $ drop 2 sx -- wtf typeable why you do dis
-      sanitize xs = xs
+instance GTypeName Text where
+  gtypeName _ = "String"
+
+instance GTypeName Bool where
+  gtypeName _ = "Boolean"
 
 writeRouteDefinition :: forall req res
   . Generic req
@@ -143,8 +130,8 @@ writeRouteDefinition name route@Route{..} =
     "  }" ++ "\n"
   where
     routes = datatypeName (from route)
-    req = nameOf (Proxy :: Proxy req)
-    res = nameOf (Proxy :: Proxy res)
+    req = nameOf (Proxy @ req)
+    res = nameOf (Proxy @ res)
 
 main :: IO ()
 main = do
@@ -152,9 +139,9 @@ main = do
   putStrLn $ writeRouteDefinition "watched" watched
   putStrLn $ writeRouteDefinition "open" open
   putStrLn $ writeRouteDefinition "update" update
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.Unused)
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.Path)
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.OpenRequest)
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.FileData)
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.WatchedData)
-  putStrLn $ writeTypeDefinition (Proxy :: Proxy T.Success)
+  putStrLn $ writeTypeDefinition (Proxy @ T.Unused)
+  putStrLn $ writeTypeDefinition (Proxy @ T.Path)
+  putStrLn $ writeTypeDefinition (Proxy @ T.FileData)
+  putStrLn $ writeTypeDefinition (Proxy @ T.OpenRequest)
+  putStrLn $ writeTypeDefinition (Proxy @ T.WatchedData)
+  putStrLn $ writeTypeDefinition (Proxy @ T.Success)

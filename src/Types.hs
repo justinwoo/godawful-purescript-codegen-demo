@@ -5,12 +5,19 @@
 module Types where
 
 import Data.Aeson (ToJSON, FromJSON)
+import Data.Text (Text)
 import GHC.Generics
 
-newtype Unused = Unused String
+newtype Unused = Unused Text
+  deriving (Show, Generic, ToJSON, FromJSON)
+newtype Flag = Flag Bool
+  deriving (Show, Generic, ToJSON, FromJSON)
+newtype Created = Created Text
+  deriving (Show, Generic, ToJSON, FromJSON)
+newtype Status = Status Text
   deriving (Show, Generic, ToJSON, FromJSON)
 
-newtype Path = Path String
+newtype Path = Path Text
   deriving (Show, Generic, ToJSON, FromJSON)
 
 newtype OpenRequest = OpenRequest
@@ -19,14 +26,14 @@ newtype OpenRequest = OpenRequest
 
 data FileData = FileData
   { path :: Path
-  , watched :: Bool
+  , watched :: Flag
   } deriving (Show, Generic, ToJSON, FromJSON)
 
 data WatchedData = WatchedData
   { path :: Path
-  , created :: String
+  , created :: Created
   } deriving (Show, Generic, ToJSON, FromJSON)
 
 newtype Success = Success
-  { status :: String
+  { status :: Status
   } deriving (Show, Generic, ToJSON, FromJSON)

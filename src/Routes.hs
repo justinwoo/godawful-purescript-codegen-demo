@@ -6,6 +6,7 @@
 module Routes where
 
 import Types (Path, WatchedData, OpenRequest, Success, FileData, Unused)
+import Data.Text (Text)
 import GHC.Generics
 
 data Method
@@ -15,7 +16,7 @@ data Method
 
 data Route req res = Route
   { method :: Method
-  , url :: String
+  , url :: Text
   } deriving (Show, Generic)
 
 files :: Route Unused [Path]
