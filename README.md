@@ -14,11 +14,11 @@ this lets me use type literals for MetaSel (Maybe symbol) to figure out if i wan
 
 * uses overlapping instances for the cons constructor so that i can handle arguments to arrays. some product hackery is also required to make this work.
 
-types of arrays have a pretty annoying representation in ghc generics, so i need to do some hacks to make things work like i want them to.
+types of arrays have a pretty annoying representation in ghc generics, so i needed to do some hacks to make things work like i want them to.
 
 * instances are added to GTypeName for each primitive type i will support
 
-well, this is entirely a good thing though, since now i can actually write down what types i support and their purescript representations.a
+well, this is entirely a good thing though, since now i can actually write down what types i support and their purescript representations.
 
 example output:
 
