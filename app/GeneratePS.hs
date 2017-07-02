@@ -6,108 +6,110 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module GeneratePS where
 
 import Data.List (intercalate)
 import Data.Proxy
-import Data.Text (Text)
-import GHC.Generics
-import GHC.TypeLits
+import Data.Text (Text, unpack)
+import Generics.SOP
 import Routes
 import qualified Types as T
 
+-- because trying to take this out of the normal extractfields is too hard
+class ExtractNewtypeField f where
+  extractNewtypeField :: g f -> String
+
+instance GTypeName a => ExtractNewtypeField (SOP I ('[ '[a] ])) where
+  extractNewtypeField _ = gtypeName (Proxy @ a)
+
+writeNewtypeDefinition :: forall a
+  . Generic a
+  => HasDatatypeInfo a
+  => GTypeName (Rep a)
+  => ExtractNewtypeField (Rep a)
+  => Proxy a
+  -> String
+writeNewtypeDefinition _ =
+  "newtype " ++ name ++ " = " ++ name ++ " " ++
+    content ++ "\n"
+  where
+    name = nameOf (Proxy @ a)
+    content = extractNewtypeField (Proxy @ (Rep a))
+
 class ExtractFields f where
-  extractFields :: g f -> [(String, String)]
+  extractFields :: g f -> [String]
 
-instance ExtractFields f => ExtractFields (D1 m f) where
-  extractFields _ = extractFields (Proxy @ f)
+-- pass around the inner structure, what could go wrong??
+instance ExtractFields xs => ExtractFields (SOP I '[ xs ]) where
+  extractFields _ = extractFields (Proxy @ xs)
 
-instance ExtractFields f => ExtractFields (C1 m f) where
-  extractFields _ = extractFields (Proxy @ f)
-
--- distinction: newtypes are 'MetaSel 'Nothing, and I only allow primtives
+-- take name and cons it
 instance
-  ( GTypeName t
-  )
-  => ExtractFields (S1 ('MetaSel 'Nothing z x c) (K1 r t)) where
-  extractFields _ =
-    pure
-      ( ""
-      , gtypeName (Proxy @ t)
-      )
+  ( ExtractFields xs
+  , Generic x
+  , HasDatatypeInfo x
+  , GTypeName (Rep x)
+  ) => ExtractFields (x ': xs) where
+  extractFields _ = nameOf (Proxy @ x) : extractFields (Proxy @ xs)
 
--- distinction: record fields are 'MetaSel 'Just symbol, and I only allow newtypes
-instance
-  ( GTypeName (Rep t)
-  , KnownSymbol name
-  )
-  => ExtractFields (S1 ('MetaSel ('Just name) z x c) (K1 r t)) where
-  extractFields _ =
-    pure
-      ( symbolVal (Proxy @ name)
-      , gtypeName (Proxy @ (Rep t))
-      )
-
-instance (ExtractFields a, ExtractFields b) => ExtractFields (a :*: b) where
-  extractFields _ =
-    extractFields (Proxy @ a) ++ extractFields (Proxy @ b)
+-- terminus
+instance ExtractFields '[] where
+  extractFields _ = []
 
 writeTypeDefinition :: forall a
-  . GTypeName (Rep a)
+  . Generic a
+  => HasDatatypeInfo a
+  => GTypeName (Rep a)
   => ExtractFields (Rep a)
   => Proxy a
   -> String
 writeTypeDefinition _ =
   "newtype " ++ name ++ " = " ++ name ++ " " ++
-    contents ++ "\n"
+     contents ++ "\n"
   where
-    name = gtypeName (Proxy @ (Rep a))
+    name = nameOf (Proxy @ a)
     fields = extractFields (Proxy @ (Rep a))
-    isNormalNewtype = case fields of
-      x:_ | fst x == "" -> True
-      _ -> False
-    format (k, t) = k ++ " :: " ++ t
-    contents = if isNormalNewtype
-      then snd (head fields)
-      else "\n  { " ++ fields' ++ "\n  }"
-    fields' = intercalate "\n  , " $ format <$> fields
+    fieldNames :: [String]
+    fieldNames = case constructorInfo $ datatypeInfo (Proxy @ a) of
+      (Record _ xs) :* _ -> hcollapse $ hmap (K . fieldName) xs
+      _ -> []
+    contents = if length fieldNames == 0
+      then head fields
+      else
+        "\n  { " ++
+          (intercalate "\n  , " $
+            zipWith (\a b -> a ++ " :: " ++ b) fieldNames fields
+          ) ++
+          "\n  }"
 
 nameOf :: forall a
   . Generic a
+  => HasDatatypeInfo a
   => GTypeName (Rep a)
   => Proxy a
   -> String
-nameOf _ = gtypeName (Proxy @ (Rep a))
+nameOf _ =
+  case datatypeName (datatypeInfo (Proxy @ a)) of
+    "[]" -> gtypeName (Proxy @ (Rep a))
+    x -> x
 
 class GTypeName f where
   gtypeName :: g f -> String
 
-instance (GTypeName f) => GTypeName (D1 m f) where
-  gtypeName _ = gtypeName (Proxy @ f)
+-- specific case to handle lists
+instance HasDatatypeInfo a => GTypeName (SOP I ('[ '[], '[a, [a]] ])) where
+  gtypeName _ = "(Array " ++ name ++ ")"
+    where
+      name = datatypeName $ datatypeInfo (Proxy @ a)
 
--- go into the Cons constructed type
-instance {-# OVERLAPPING #-} (GTypeName f) => GTypeName (C1 ('MetaCons ":" g s) f) where
-  gtypeName _ = gtypeName (Proxy @ f)
+-- yup, only here to please compiler
+instance GTypeName (SOP I ('[ xs ])) where
+  gtypeName _ = error "UNUSED INSTANCE TO PLEASE COMPILER"
 
-instance (KnownSymbol n) => GTypeName (C1 ('MetaCons n g s) f) where
-  gtypeName _ = symbolVal (Proxy @ n)
-
--- take the left side, as this is the result of a type product from Cons
--- a :*: [a] or some shit, fucking ghc generics
-instance (GTypeName a) => GTypeName (a :*: b) where
-  gtypeName _ =
-    gtypeName (Proxy @ a)
-
-instance (GTypeName b) => GTypeName ((C1 ('MetaCons "[]" g s) f) :+: b) where
-  gtypeName _ = "(Array " ++ gtypeName (Proxy @ b) ++ ")"
-
-instance GTypeName f => GTypeName (S1 m f) where
-  gtypeName _ = gtypeName (Proxy @ f)
-
-instance GTypeName (Rep f) => GTypeName (K1 R f) where
-  gtypeName _ = gtypeName (Proxy @ (Rep f))
-
+-- instances for primitives i'm using
 instance GTypeName Text where
   gtypeName _ = "String"
 
@@ -117,19 +119,22 @@ instance GTypeName Bool where
 writeRouteDefinition :: forall req res
   . Generic req
   => Generic res
+  => HasDatatypeInfo req
+  => HasDatatypeInfo res
   => GTypeName (Rep req)
   => GTypeName (Rep res)
   => String
   -> Route req res
   -> String
-writeRouteDefinition name route@Route{..} =
+writeRouteDefinition name Route{..} =
   name ++ " :: " ++ routes ++ " " ++ req ++ " " ++ res ++ "\n" ++
   name ++ " =" ++ "\n" ++
     "  { method: " ++ show method ++ "\n" ++
-    "  , url: " ++ show url ++ "\n" ++
+    "  , url: " ++ show url' ++ "\n" ++
     "  }" ++ "\n"
   where
-    routes = datatypeName (from route)
+    url' | T.Url txt <- url = unpack txt
+    routes = datatypeName $ datatypeInfo (Proxy @ (Route req res))
     req = nameOf (Proxy @ req)
     res = nameOf (Proxy @ res)
 
@@ -139,8 +144,9 @@ main = do
   putStrLn $ writeRouteDefinition "watched" watched
   putStrLn $ writeRouteDefinition "open" open
   putStrLn $ writeRouteDefinition "update" update
-  putStrLn $ writeTypeDefinition (Proxy @ T.Unused)
-  putStrLn $ writeTypeDefinition (Proxy @ T.Path)
+  putStrLn $ writeNewtypeDefinition (Proxy @ T.Unused)
+  putStrLn $ writeNewtypeDefinition (Proxy @ T.Path)
+  putStrLn $ writeNewtypeDefinition (Proxy @ T.Flag)
   putStrLn $ writeTypeDefinition (Proxy @ T.FileData)
   putStrLn $ writeTypeDefinition (Proxy @ T.OpenRequest)
   putStrLn $ writeTypeDefinition (Proxy @ T.WatchedData)
