@@ -1,6 +1,7 @@
 flags: {}
 extra-package-dbs: []
 packages:
-- .
-extra-deps: []
-resolver: lts-8.18
+- '.'
+extra-deps:
+- records-sop-0.1.0.0
+resolver: nightly-2017-08-08

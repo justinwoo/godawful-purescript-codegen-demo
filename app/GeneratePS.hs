@@ -8,6 +8,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DefaultSignatures #-}
 
 module GeneratePS where
 
@@ -15,114 +16,83 @@ import Data.List (intercalate)
 import Data.Proxy
 import Data.Text (Text, unpack)
 import Generics.SOP
+import Generics.SOP.Record
+import GHC.TypeLits
 import Routes
 import qualified Types as T
 
--- because trying to take this out of the normal extractfields is too hard
-class ExtractNewtypeField f where
-  extractNewtypeField :: g f -> String
-
-instance GTypeName a => ExtractNewtypeField (SOP I ('[ '[a] ])) where
-  extractNewtypeField _ = gtypeName (Proxy @ a)
-
-writeNewtypeDefinition :: forall a
-  . Generic a
-  => HasDatatypeInfo a
-  => GTypeName (Rep a)
-  => ExtractNewtypeField (Rep a)
-  => Proxy a
-  -> String
-writeNewtypeDefinition _ =
-  "newtype " ++ name ++ " = " ++ name ++ " " ++
-    content ++ "\n"
+writeNewtypeDefinition :: forall a b
+   . IsNewtype a b
+  => PSTypeName a
+  => PSTypeName b
+  => Proxy a -> String
+writeNewtypeDefinition proxy =
+  "newtype " ++ name ++ " = " ++ name ++ " " ++ inner
   where
-    name = nameOf (Proxy @ a)
-    content = extractNewtypeField (Proxy @ (Rep a))
+    name = getTypeName proxy
+    inner = getTypeName (Proxy @ b)
 
 class ExtractFields f where
   extractFields :: g f -> [String]
 
--- pass around the inner structure, what could go wrong??
-instance ExtractFields xs => ExtractFields (SOP I '[ xs ]) where
-  extractFields _ = extractFields (Proxy @ xs)
-
--- take name and cons it
 instance
   ( ExtractFields xs
-  , Generic x
-  , HasDatatypeInfo x
-  , GTypeName (Rep x)
-  ) => ExtractFields (x ': xs) where
-  extractFields _ = nameOf (Proxy @ x) : extractFields (Proxy @ xs)
+  , KnownSymbol name
+  , PSTypeName a
+  ) => ExtractFields ('(name, a) : xs) where
+  extractFields _ = x : extractFields (Proxy @ xs)
+    where
+      name = symbolVal (Proxy @ name)
+      value = getTypeName (Proxy @ a)
+      x = name ++ " :: " ++ value
 
--- terminus
 instance ExtractFields '[] where
   extractFields _ = []
 
-writeTypeDefinition :: forall a
-  . Generic a
-  => HasDatatypeInfo a
-  => GTypeName (Rep a)
-  => ExtractFields (Rep a)
-  => Proxy a
-  -> String
-writeTypeDefinition _ =
-  "newtype " ++ name ++ " = " ++ name ++ " " ++
-     contents ++ "\n"
+writeRecordTypeDefinition :: forall a r
+   . IsRecord a r
+  => PSTypeName a
+  => ExtractFields r
+  => Proxy a -> String
+writeRecordTypeDefinition proxy =
+  "newtype " ++ name ++ " = " ++ name
+    ++ "\n  { " ++ fields ++ "\n  }\n"
   where
-    name = nameOf (Proxy @ a)
-    fields = extractFields (Proxy @ (Rep a))
-    fieldNames :: [String]
-    fieldNames = case constructorInfo $ datatypeInfo (Proxy @ a) of
-      (Record _ xs) :* _ -> hcollapse $ hmap (K . fieldName) xs
-      _ -> []
-    contents = if length fieldNames == 0
-      then head fields
-      else
-        "\n  { " ++
-          (intercalate "\n  , " $
-            zipWith (\a b -> a ++ " :: " ++ b) fieldNames fields
-          ) ++
-          "\n  }"
+    name = getTypeName proxy
+    fields = intercalate "\n  , " $ extractFields (Proxy @ r)
 
-nameOf :: forall a
-  . Generic a
-  => HasDatatypeInfo a
-  => GTypeName (Rep a)
-  => Proxy a
-  -> String
-nameOf _ =
-  case datatypeName (datatypeInfo (Proxy @ a)) of
-    "[]" -> gtypeName (Proxy @ (Rep a))
-    x -> x
+class PSTypeName a where
+  getTypeName :: forall g. g a -> String
 
-class GTypeName f where
-  gtypeName :: g f -> String
+  default getTypeName :: forall g
+    . HasDatatypeInfo a
+    => g a -> String
+  getTypeName = datatypeName . datatypeInfo
 
--- specific case to handle lists
-instance HasDatatypeInfo a => GTypeName (SOP I ('[ '[], '[a, [a]] ])) where
-  gtypeName _ = "(Array " ++ name ++ ")"
-    where
-      name = datatypeName $ datatypeInfo (Proxy @ a)
+instance
+  ( PSTypeName a
+  ) => PSTypeName [a] where
+  getTypeName _ = "(Array " ++ getTypeName (Proxy @ a) ++ ")"
 
--- yup, only here to please compiler
-instance GTypeName (SOP I ('[ xs ])) where
-  gtypeName _ = error "UNUSED INSTANCE TO PLEASE COMPILER"
+instance PSTypeName Text where
+  getTypeName _ = "String"
 
--- instances for primitives i'm using
-instance GTypeName Text where
-  gtypeName _ = "String"
+instance PSTypeName Bool where
+  getTypeName _ = "Boolean"
 
-instance GTypeName Bool where
-  gtypeName _ = "Boolean"
+instance PSTypeName T.Unused
+instance PSTypeName T.Path
+instance PSTypeName T.Flag
+instance PSTypeName T.Created
+instance PSTypeName T.Status
+instance PSTypeName T.FileData
+instance PSTypeName T.OpenRequest
+instance PSTypeName T.WatchedData
+instance PSTypeName T.Success
 
 writeRouteDefinition :: forall req res
-  . Generic req
-  => Generic res
-  => HasDatatypeInfo req
-  => HasDatatypeInfo res
-  => GTypeName (Rep req)
-  => GTypeName (Rep res)
+   . PSTypeName req
+  => PSTypeName res
   => String
   -> Route req res
   -> String
@@ -135,8 +105,8 @@ writeRouteDefinition name Route{..} =
   where
     url' | T.Url txt <- url = unpack txt
     routes = datatypeName $ datatypeInfo (Proxy @ (Route req res))
-    req = nameOf (Proxy @ req)
-    res = nameOf (Proxy @ res)
+    req = getTypeName (Proxy @ req)
+    res = getTypeName (Proxy @ res)
 
 main :: IO ()
 main = do
@@ -147,7 +117,7 @@ main = do
   putStrLn $ writeNewtypeDefinition (Proxy @ T.Unused)
   putStrLn $ writeNewtypeDefinition (Proxy @ T.Path)
   putStrLn $ writeNewtypeDefinition (Proxy @ T.Flag)
-  putStrLn $ writeTypeDefinition (Proxy @ T.FileData)
-  putStrLn $ writeTypeDefinition (Proxy @ T.OpenRequest)
-  putStrLn $ writeTypeDefinition (Proxy @ T.WatchedData)
-  putStrLn $ writeTypeDefinition (Proxy @ T.Success)
+  putStrLn $ writeRecordTypeDefinition (Proxy @ T.FileData)
+  putStrLn $ writeRecordTypeDefinition (Proxy @ T.OpenRequest)
+  putStrLn $ writeRecordTypeDefinition (Proxy @ T.WatchedData)
+  putStrLn $ writeRecordTypeDefinition (Proxy @ T.Success)

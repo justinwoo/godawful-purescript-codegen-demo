@@ -13,14 +13,17 @@ newtype Unused = Unused Text
   deriving (Show, GHC.Generic, ToJSON, FromJSON)
 instance Generic Unused
 instance HasDatatypeInfo Unused
+
 newtype Flag = Flag Bool
   deriving (Show, GHC.Generic, ToJSON, FromJSON)
 instance Generic Flag
 instance HasDatatypeInfo Flag
+
 newtype Created = Created Text
   deriving (Show, GHC.Generic, ToJSON, FromJSON)
 instance Generic Created
 instance HasDatatypeInfo Created
+
 newtype Status = Status Text
   deriving (Show, GHC.Generic, ToJSON, FromJSON)
 instance Generic Status
